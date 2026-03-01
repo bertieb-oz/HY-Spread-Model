@@ -1269,6 +1269,8 @@ def main():
             "T-Statistic": model_stats["t_stats"],
             "P-Value": model_stats["p_values"],
         })
+        # Sort by absolute T-Statistic (most significant first)
+        stats_df = stats_df.sort_values("T-Statistic", key=abs, ascending=False).reset_index(drop=True)
         st.dataframe(
             stats_df.style.format({
                 "Coefficient": "{:.6f}",
