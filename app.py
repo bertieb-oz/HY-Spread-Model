@@ -619,6 +619,16 @@ def monthly_attribution(results, coef_df, feature_cols, feature_labels):
     """
     Calculate factor-level contribution to predicted spread changes.
 
+    Uses a fully reconciling decomposition:
+      Predicted_T   = Σ(coef_T × feature_T)   + intercept_T
+      Predicted_T-1 = Σ(coef_T-1 × feature_T-1) + intercept_T-1
+
+    The change in predicted spread is decomposed into:
+      1. Feature Effect:  coef_T-1 × (feature_T - feature_T-1)
+         → contribution from features changing, holding coefficients constant
+      2. Model Recalibration: everything else (coef drift + interaction + intercept change)
+         → lumped into a single line so the total reconciles exactly
+
     Returns a DataFrame sorted by absolute contribution (descending) with
     both spread-level and basis-point columns.
     """
@@ -629,19 +639,39 @@ def monthly_attribution(results, coef_df, feature_cols, feature_labels):
     idx_last = int(last["idx"])
     idx_prev = int(prev["idx"])
 
+    # Actual change in predicted spread (the number we must reconcile to)
+    pred_last = results["predicted"].iloc[idx_last]
+    pred_prev = results["predicted"].iloc[idx_prev]
+    if pd.isna(pred_last) or pd.isna(pred_prev):
+        return None
+    actual_pred_change = pred_last - pred_prev  # in spread % units
+
     attrib_rows = []
+    total_feature_effect = 0.0
+
     for col in feature_cols:
         coef_key = f"coef_{col}"
-        if coef_key not in last:
+        # Need coefficient from PREVIOUS window to compute feature effect
+        if coef_key not in prev or coef_key not in last:
             continue
-        coef_val = last[coef_key]
-        if coef_val == 0 or pd.isna(coef_val):
+        coef_prev = prev[coef_key]
+        coef_last = last[coef_key]
+        if pd.isna(coef_prev) and pd.isna(coef_last):
             continue
+
+        # Use previous-period coefficient for the feature effect
+        # (holding model constant, how much did feature moves contribute?)
+        coef_for_attrib = coef_prev if not pd.isna(coef_prev) else 0.0
         feat_change = results[col].iloc[idx_last] - results[col].iloc[idx_prev]
-        contribution = coef_val * feat_change
+        contribution = coef_for_attrib * feat_change
+        total_feature_effect += contribution
+
+        if coef_for_attrib == 0 and feat_change == 0:
+            continue
+
         attrib_rows.append({
             "Factor": feature_labels.get(col, col),
-            "Coefficient": coef_val,
+            "Coefficient": coef_for_attrib,
             "Feature Change": feat_change,
             "Contribution (spread, %)": contribution,
             "Contribution (bps)": contribution * 100,
@@ -649,6 +679,16 @@ def monthly_attribution(results, coef_df, feature_cols, feature_labels):
 
     if not attrib_rows:
         return None
+
+    # Model Recalibration line: absorbs intercept change + coefficient drift + interaction
+    recalib = actual_pred_change - total_feature_effect
+    attrib_rows.append({
+        "Factor": "Model Recalibration",
+        "Coefficient": np.nan,
+        "Feature Change": np.nan,
+        "Contribution (spread, %)": recalib,
+        "Contribution (bps)": recalib * 100,
+    })
 
     attrib = pd.DataFrame(attrib_rows)
     # Sort by absolute impact descending
@@ -1122,9 +1162,15 @@ def main():
     st.subheader("📝 Commentary & Attribution")
     attrib = monthly_attribution(results, coef_df, active_feature_cols, active_feature_labels)
     if attrib is not None and len(attrib) > 0:
-        # Net move across all factors (stable even when near zero)
+        # Net move = actual change in predicted spread (fully reconciled)
         net_move = attrib["Contribution (bps)"].sum()
-        top = attrib.head(3)
+
+        # Separate factor contributions from model recalibration
+        factor_attrib = attrib[attrib["Factor"] != "Model Recalibration"]
+        recalib_row = attrib[attrib["Factor"] == "Model Recalibration"]
+        recalib_bps = recalib_row["Contribution (bps)"].iloc[0] if len(recalib_row) > 0 else 0.0
+
+        top = factor_attrib.head(3)
 
         # Build automated narrative
         lines = [
@@ -1141,6 +1187,13 @@ def main():
                     f"({row['Contribution (bps)']:+.1f} bps)"
                 )
 
+        # Show recalibration if material
+        if abs(recalib_bps) >= 0.5:
+            lines.append(
+                f"**Model Recalibration:** {recalib_bps:+.1f} bps "
+                f"(coefficient drift + intercept change from rolling window shift)"
+            )
+
         lines.append(
             f"**Signal Status:** Spreads are currently **{signal}** "
             f"with a Z-Score of **{latest['z_score']:.2f}** "
@@ -1154,11 +1207,16 @@ def main():
 
         with st.expander(f"🔍 Detailed Factor Attribution ({len(material)} material factors)", expanded=False):
             if len(material) > 0:
+                def _fmt(val, fmt_str):
+                    if pd.isna(val):
+                        return "—"
+                    return fmt_str.format(val)
+
                 st.dataframe(
                     material[["Factor", "Coefficient", "Feature Change",
                               "Contribution (spread, %)", "Contribution (bps)", "% of Total"]].style.format({
-                        "Coefficient": "{:.6f}",
-                        "Feature Change": "{:.4f}",
+                        "Coefficient": lambda v: _fmt(v, "{:.6f}"),
+                        "Feature Change": lambda v: _fmt(v, "{:.4f}"),
                         "Contribution (spread, %)": "{:+.4f}",
                         "Contribution (bps)": "{:+.1f}",
                         "% of Total": "{:+.1f}%",
