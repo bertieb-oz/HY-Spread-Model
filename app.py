@@ -594,13 +594,25 @@ def calculate_oos_r2(results):
     return 1 - ss_res / ss_tot
 
 
-def calculate_signals(results, cheap_thresh, rich_thresh):
-    """Calculate z-scores and trading signals."""
-    valid = results["residual"].dropna()
-    mean_r = valid.mean()
-    std_r = valid.std()
+def calculate_signals(results, cheap_thresh, rich_thresh, lookback=None):
+    """
+    Calculate z-scores and trading signals.
 
-    results["z_score"] = (results["residual"] - mean_r) / std_r
+    If lookback is provided, the z-score is normalised against the trailing
+    `lookback` residuals (consistent with the rolling regression window).
+    Otherwise falls back to expanding (full-history) normalisation.
+    """
+    if lookback is not None:
+        # Rolling z-score: each residual normalised against the prior `lookback` residuals
+        rolling_mean = results["residual"].rolling(window=lookback, min_periods=20).mean()
+        rolling_std = results["residual"].rolling(window=lookback, min_periods=20).std()
+        results["z_score"] = (results["residual"] - rolling_mean) / rolling_std
+    else:
+        # Fallback: full-history normalisation
+        valid = results["residual"].dropna()
+        mean_r = valid.mean()
+        std_r = valid.std()
+        results["z_score"] = (results["residual"] - mean_r) / std_r
 
     def _signal(z):
         if pd.isna(z):
@@ -713,23 +725,38 @@ def chart_actual_vs_predicted(results):
     return fig
 
 
-def chart_residuals(results, cheap_thresh, rich_thresh):
-    valid = results.dropna(subset=["residual"])
-    mean_r = valid["residual"].mean()
-    std_r = valid["residual"].std()
+def chart_residuals(results, cheap_thresh, rich_thresh, lookback=None):
+    valid = results.dropna(subset=["residual"]).copy()
+
+    # Compute rolling mean and std for time-varying threshold bands
+    if lookback is not None:
+        rolling_mean = valid["residual"].rolling(window=lookback, min_periods=20).mean()
+        rolling_std = valid["residual"].rolling(window=lookback, min_periods=20).std()
+    else:
+        # Expanding window fallback
+        rolling_mean = valid["residual"].expanding(min_periods=20).mean()
+        rolling_std = valid["residual"].expanding(min_periods=20).std()
+
+    cheap_band = rolling_mean + cheap_thresh * rolling_std
+    rich_band = rolling_mean - rich_thresh * rolling_std
 
     fig = go.Figure()
     colors = valid["signal"].map({"CHEAP": "#27ae60", "RICH": "#e74c3c", "NEUTRAL": "#95a5a6", "N/A": "#bdc3c7"})
     fig.add_trace(go.Scatter(x=valid["date"], y=valid["residual"], mode="lines+markers",
                              marker=dict(color=colors, size=5), line=dict(color="#7f8c8d", width=1),
                              name="Residual"))
-    fig.add_hline(y=mean_r + cheap_thresh * std_r, line_dash="dash", line_color="#27ae60",
-                  annotation_text=f"Cheap ({cheap_thresh}σ)")
-    fig.add_hline(y=mean_r - rich_thresh * std_r, line_dash="dash", line_color="#e74c3c",
-                  annotation_text=f"Rich (-{rich_thresh}σ)")
-    fig.add_hline(y=mean_r, line_dash="dot", line_color="gray")
+    fig.add_trace(go.Scatter(x=valid["date"], y=cheap_band, mode="lines",
+                             line=dict(color="#27ae60", width=1.5, dash="dash"),
+                             name=f"Cheap ({cheap_thresh}σ)"))
+    fig.add_trace(go.Scatter(x=valid["date"], y=rich_band, mode="lines",
+                             line=dict(color="#e74c3c", width=1.5, dash="dash"),
+                             name=f"Rich (-{rich_thresh}σ)"))
+    fig.add_trace(go.Scatter(x=valid["date"], y=rolling_mean, mode="lines",
+                             line=dict(color="gray", width=1, dash="dot"),
+                             name="Rolling Mean"))
     fig.update_layout(title="Residuals Over Time", xaxis_title="Date", yaxis_title="Residual (%)",
-                      template="plotly_white", height=400)
+                      template="plotly_white", height=400,
+                      legend=dict(orientation="h", y=1.12))
     return fig
 
 
@@ -1071,7 +1098,7 @@ def main():
         return
 
     results, model_stats, coef_df, latest_selections, active_feature_cols = reg_result
-    results = calculate_signals(results, cheap_thresh, rich_thresh)
+    results = calculate_signals(results, cheap_thresh, rich_thresh, lookback)
 
     # Build active feature_labels for the selected features only
     active_feature_labels = {c: feature_labels.get(c, c) for c in active_feature_cols}
@@ -1150,7 +1177,7 @@ def main():
                                   yaxis_title="Spread Change (%)")
         st.plotly_chart(fig_avp, use_container_width=True)
     with tab2:
-        st.plotly_chart(chart_residuals(results, cheap_thresh, rich_thresh), use_container_width=True)
+        st.plotly_chart(chart_residuals(results, cheap_thresh, rich_thresh, lookback), use_container_width=True)
     with tab3:
         st.plotly_chart(chart_zscore(results, cheap_thresh, rich_thresh), use_container_width=True)
     with tab4:
