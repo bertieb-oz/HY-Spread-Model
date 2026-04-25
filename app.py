@@ -1272,6 +1272,10 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
     return fig
 
 
+# ─────────────────────────────────────────────────────────────
+# Streamlit App
+# ─────────────────────────────────────────────────────────────
+def main():
     # ── Sidebar ──
     st.sidebar.image("https://img.icons8.com/color/96/combo-chart.png", width=60)
     st.sidebar.title("HY Rich/Cheap Model")
