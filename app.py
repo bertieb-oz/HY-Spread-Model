@@ -1366,6 +1366,10 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
         return
     raw_df, dep_var_col, variable_flags, original_names = result
 
+    # Initialise BEY panel variables — always defined so the Excel export
+    # section never hits a NameError even if the BEY section exits early.
+    bey_df = ytw_col_bey = coupon_col_bey = rf_col_bey = None
+
     # Show detected configuration in sidebar
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📋 Detected Variables")
@@ -1571,9 +1575,13 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
         "bottom-up fundamental valuation anchor."
     )
 
-    bey_df, ytw_col_bey, coupon_col_bey, rf_col_bey = calculate_bey_panel(
-        raw_df, original_names, bey_default_rate
-    )
+    try:
+        bey_df, ytw_col_bey, coupon_col_bey, rf_col_bey = calculate_bey_panel(
+            raw_df, original_names, bey_default_rate
+        )
+    except Exception as e:
+        st.warning(f"⚠️ BEY Panel could not be calculated: {e}")
+        bey_df = ytw_col_bey = coupon_col_bey = rf_col_bey = None
 
     if bey_df is not None and len(bey_df) > 0:
         lb = bey_df.iloc[-1]
@@ -1613,16 +1621,22 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
             )
 
         # ── Chart: YTW vs BEY scenarios / premium ──
-        st.plotly_chart(chart_bey_premium(bey_df, ytw_col_bey, bey_default_rate), use_container_width=True)
+        try:
+            st.plotly_chart(chart_bey_premium(bey_df, ytw_col_bey, bey_default_rate), use_container_width=True)
+        except Exception as e:
+            st.warning(f"⚠️ BEY premium chart error: {e}")
 
         # ── Chart: historical default rate vs implied DR ──
-        st.plotly_chart(chart_default_rate_history(bey_df), use_container_width=True)
-        st.caption(
-            "Bars show JPM annual HY default rates split into economic loss (dark) and recovered portion (light). "
-            "Red line shows the market-implied default rate derived monthly from the BEY model. "
-            "Reference lines: full-cycle mean 3.3% (1982–2025), post-GFC mean 1.8% (2010–2025). "
-            "Recovery rates: JPM actuals 1990–2024; 40% fallback for 1982–1989 and 2025."
-        )
+        try:
+            st.plotly_chart(chart_default_rate_history(bey_df), use_container_width=True)
+            st.caption(
+                "Bars show JPM annual HY default rates split into economic loss (dark) and recovered portion (light). "
+                "Red line shows the market-implied default rate derived monthly from the BEY model. "
+                "Reference lines: full-cycle mean 3.3% (1982–2025), post-GFC mean 1.8% (2010–2025). "
+                "Recovery rates: JPM actuals 1990–2024; 40% fallback for 1982–1989 and 2025."
+            )
+        except Exception as e:
+            st.warning(f"⚠️ Default rate history chart error: {e}")
 
         # ── Interpretation narrative ──
         implied_dr = lb["implied_dr"]
