@@ -1569,65 +1569,59 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
     # ── Section 5: BEY Fundamental Anchor ──
     st.markdown("---")
     st.subheader("⚖️ Fundamental Anchor — Break-Even Yield Premium")
-    st.caption(
-        "Based on Altman & Bencivenga (1995). Asks: given expected defaults and recoveries, "
-        "is the market offering adequate compensation? Complements the OLS z-score signal with a "
-        "bottom-up fundamental valuation anchor."
-    )
 
     try:
+        import traceback as _tb
+
+        st.caption(
+            "Based on Altman & Bencivenga (1995). Asks: given expected defaults and recoveries, "
+            "is the market offering adequate compensation? Complements the OLS z-score signal with a "
+            "bottom-up fundamental valuation anchor."
+        )
+
         bey_df, ytw_col_bey, coupon_col_bey, rf_col_bey = calculate_bey_panel(
             raw_df, original_names, bey_default_rate
         )
-    except Exception as e:
-        st.warning(f"⚠️ BEY Panel could not be calculated: {e}")
-        bey_df = ytw_col_bey = coupon_col_bey = rf_col_bey = None
 
-    if bey_df is not None and len(bey_df) > 0:
-        lb = bey_df.iloc[-1]
+        if bey_df is not None and len(bey_df) > 0:
+            lb = bey_df.iloc[-1]
 
-        # ── Metric row ──
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("HY Yield to Worst", f"{lb[ytw_col_bey]:.2f}%",
-                  help="Bloomberg HY index yield-to-worst (absolute yield, not spread)")
-        c2.metric(f"Break-Even Yield ({bey_default_rate:.1f}% DR)", f"{lb['bey']:.2f}%",
-                  help="Minimum yield required to break even vs Treasuries at the selected default rate assumption")
-        prem_bps = lb["premium_bps"]
-        c3.metric(
-            "Yield Premium", f"{prem_bps:+.0f} bps",
-            delta="Cheap vs BEY" if prem_bps >= 0 else "Rich vs BEY",
-            delta_color="normal" if prem_bps >= 0 else "inverse",
-            help="Positive = HY is offering more than required to compensate for default risk (cheap). "
-                 "Negative = HY is not covering default risk compensation (rich)."
-        )
-        c4.metric("Implied Default Rate", f"{lb['implied_dr']:.1f}%",
-                  help="The annual default rate the market is implicitly pricing given current "
-                       "YTW vs risk-free rate. Compare to: current LTM ~1.2%, post-GFC avg 1.8%, "
-                       "full-cycle avg 3.3% (JPM 1982–2025).")
-
-        # ── Scenario comparison row ──
-        st.markdown("**Premium across default-rate scenarios:**")
-        sc1, sc2, sc3 = st.columns(3)
-        for col_st, label, key in [
-            (sc1, "Benign — 1.5% DR", "benign"),
-            (sc2, "Cycle Avg — 2.5% DR", "cycle"),
-            (sc3, "Stressed — 4.0% DR", "stressed"),
-        ]:
-            p = lb[f"premium_bps_{key}"]
-            col_st.metric(
-                label, f"{p:+.0f} bps",
-                delta="Cheap vs BEY" if p >= 0 else "Rich vs BEY",
-                delta_color="normal" if p >= 0 else "inverse",
+            # ── Metric row ──
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("HY Yield to Worst", f"{lb[ytw_col_bey]:.2f}%",
+                      help="Bloomberg HY index yield-to-worst (absolute yield, not spread)")
+            c2.metric(f"Break-Even Yield ({bey_default_rate:.1f}% DR)", f"{lb['bey']:.2f}%",
+                      help="Minimum yield required to break even vs Treasuries at the selected default rate assumption")
+            prem_bps = lb["premium_bps"]
+            c3.metric(
+                "Yield Premium", f"{prem_bps:+.0f} bps",
+                delta="Cheap vs BEY" if prem_bps >= 0 else "Rich vs BEY",
+                delta_color="normal" if prem_bps >= 0 else "inverse",
+                help="Positive = HY is offering more than required to compensate for default risk (cheap). "
+                     "Negative = HY is not covering default risk compensation (rich)."
             )
+            c4.metric("Implied Default Rate", f"{lb['implied_dr']:.1f}%",
+                      help="The annual default rate the market is implicitly pricing given current "
+                           "YTW vs risk-free rate. Compare to: current LTM ~1.2%, post-GFC avg 1.8%, "
+                           "full-cycle avg 3.3% (JPM 1982–2025).")
 
-        # ── Chart: YTW vs BEY scenarios / premium ──
-        try:
+            # ── Scenario comparison row ──
+            st.markdown("**Premium across default-rate scenarios:**")
+            sc1, sc2, sc3 = st.columns(3)
+            for col_st, label, key in [
+                (sc1, "Benign — 1.5% DR", "benign"),
+                (sc2, "Cycle Avg — 2.5% DR", "cycle"),
+                (sc3, "Stressed — 4.0% DR", "stressed"),
+            ]:
+                p = lb[f"premium_bps_{key}"]
+                col_st.metric(
+                    label, f"{p:+.0f} bps",
+                    delta="Cheap vs BEY" if p >= 0 else "Rich vs BEY",
+                    delta_color="normal" if p >= 0 else "inverse",
+                )
+
+            # ── Charts ──
             st.plotly_chart(chart_bey_premium(bey_df, ytw_col_bey, bey_default_rate), use_container_width=True)
-        except Exception as e:
-            st.warning(f"⚠️ BEY premium chart error: {e}")
-
-        # ── Chart: historical default rate vs implied DR ──
-        try:
             st.plotly_chart(chart_default_rate_history(bey_df), use_container_width=True)
             st.caption(
                 "Bars show JPM annual HY default rates split into economic loss (dark) and recovered portion (light). "
@@ -1635,65 +1629,69 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
                 "Reference lines: full-cycle mean 3.3% (1982–2025), post-GFC mean 1.8% (2010–2025). "
                 "Recovery rates: JPM actuals 1990–2024; 40% fallback for 1982–1989 and 2025."
             )
-        except Exception as e:
-            st.warning(f"⚠️ Default rate history chart error: {e}")
 
-        # ── Interpretation narrative ──
-        implied_dr = lb["implied_dr"]
-        if prem_bps > 100:
-            prem_interp = "materially above break-even — a clear fundamental buying signal"
-        elif prem_bps > 0:
-            prem_interp = "modestly above break-even — adequate but not compelling compensation"
-        elif prem_bps > -100:
-            prem_interp = "modestly below break-even — spread income may not cover expected defaults"
-        else:
-            prem_interp = "materially below break-even — spreads appear rich on a fundamental basis"
+            # ── Interpretation narrative ──
+            implied_dr = lb["implied_dr"]
+            if prem_bps > 100:
+                prem_interp = "materially above break-even — a clear fundamental buying signal"
+            elif prem_bps > 0:
+                prem_interp = "modestly above break-even — adequate but not compelling compensation"
+            elif prem_bps > -100:
+                prem_interp = "modestly below break-even — spread income may not cover expected defaults"
+            else:
+                prem_interp = "materially below break-even — spreads appear rich on a fundamental basis"
 
-        st.info(
-            f"**Fundamental Read ({lb['date'].strftime('%b %Y')}):** "
-            f"At a **{bey_default_rate:.1f}%** default rate assumption, the HY market is offering a "
-            f"**{prem_bps:+.0f} bps** yield premium above break-even — {prem_interp}. "
-            f"Current spreads imply the market is pricing in an annual default rate of "
-            f"**{implied_dr:.1f}%** "
-            f"(vs JPM current LTM ~1.2%, post-GFC avg 1.8%, full-cycle avg 3.3%). "
-            f"Recovery rate: 40% (Altman calibration; JPM 1990–2018 mean: 44%)."
-        )
-
-        # ── Historical BEY table (collapsible) ──
-        with st.expander("📋 Historical BEY & Premium Table", expanded=False):
-            disp = bey_df[["date", ytw_col_bey, rf_col_bey, coupon_col_bey,
-                           "bey", "premium_bps", "implied_dr"]].copy()
-            disp.columns = ["Date", "YTW (%)", "Risk-Free (%)", "Avg Coupon (%)",
-                            "BEY (%)", "Premium (bps)", "Implied DR (%)"]
-            st.dataframe(
-                disp.sort_values("Date", ascending=False).style.format({
-                    "Date": lambda x: x.strftime("%Y-%m-%d"),
-                    "YTW (%)": "{:.2f}",
-                    "Risk-Free (%)": "{:.2f}",
-                    "Avg Coupon (%)": "{:.2f}",
-                    "BEY (%)": "{:.2f}",
-                    "Premium (bps)": "{:+.0f}",
-                    "Implied DR (%)": "{:.1f}",
-                }).apply(lambda col: [
-                    "background-color: #c8e6c9" if v > 0 else
-                    "background-color: #ffcdd2" if v < 0 else ""
-                    for v in col
-                ] if col.name == "Premium (bps)" else [""] * len(col)),
-                use_container_width=True,
-                height=380,
+            st.info(
+                f"**Fundamental Read ({lb['date'].strftime('%b %Y')}):** "
+                f"At a **{bey_default_rate:.1f}%** default rate assumption, the HY market is offering a "
+                f"**{prem_bps:+.0f} bps** yield premium above break-even — {prem_interp}. "
+                f"Current spreads imply the market is pricing in an annual default rate of "
+                f"**{implied_dr:.1f}%** "
+                f"(vs JPM current LTM ~1.2%, post-GFC avg 1.8%, full-cycle avg 3.3%). "
+                f"Recovery rate: 40% (Altman calibration; JPM 1990–2018 mean: 44%)."
             )
-    else:
-        missing = []
-        if ytw_col_bey is None:
-            missing.append("HY Yield to Worst (e.g. 'US HY YTW')")
-        if coupon_col_bey is None:
-            missing.append("HY Avg Coupon (e.g. 'US HY Coupon')")
-        if rf_col_bey is None:
-            missing.append("US 10Y Yield (e.g. 'US 10s')")
-        st.info(
-            f"ℹ️ BEY Panel requires these columns in your Excel file (flagged `N`): "
-            f"{', '.join(missing) if missing else 'columns not found in data'}."
-        )
+
+            # ── Historical BEY table ──
+            with st.expander("📋 Historical BEY & Premium Table", expanded=False):
+                disp = bey_df[["date", ytw_col_bey, rf_col_bey, coupon_col_bey,
+                               "bey", "premium_bps", "implied_dr"]].copy()
+                disp.columns = ["Date", "YTW (%)", "Risk-Free (%)", "Avg Coupon (%)",
+                                "BEY (%)", "Premium (bps)", "Implied DR (%)"]
+
+                def _bey_row_style(row):
+                    prem = row["Premium (bps)"]
+                    colour = "#c8e6c9" if prem > 0 else ("#ffcdd2" if prem < 0 else "")
+                    return [f"background-color: {colour}" if colour else "" for _ in row]
+
+                st.dataframe(
+                    disp.sort_values("Date", ascending=False).style.format({
+                        "Date": lambda x: x.strftime("%Y-%m-%d"),
+                        "YTW (%)": "{:.2f}",
+                        "Risk-Free (%)": "{:.2f}",
+                        "Avg Coupon (%)": "{:.2f}",
+                        "BEY (%)": "{:.2f}",
+                        "Premium (bps)": "{:+.0f}",
+                        "Implied DR (%)": "{:.1f}",
+                    }).apply(_bey_row_style, axis=1),
+                    use_container_width=True,
+                    height=380,
+                )
+        else:
+            missing = []
+            if ytw_col_bey is None:
+                missing.append("HY Yield to Worst (e.g. 'US HY YTW')")
+            if coupon_col_bey is None:
+                missing.append("HY Avg Coupon (e.g. 'US HY Coupon')")
+            if rf_col_bey is None:
+                missing.append("US 10Y Yield (e.g. 'US 10s')")
+            st.info(
+                f"ℹ️ BEY Panel requires these columns in your Excel file (flagged `N`): "
+                f"{', '.join(missing) if missing else 'columns not found in data'}."
+            )
+
+    except Exception:
+        st.error("**BEY Panel error — full traceback (share this to get a fix):**")
+        st.code(_tb.format_exc())
 
     # ── Section 6: Regression Statistics ──
     with st.expander("📋 Regression Statistics", expanded=False):
@@ -1759,20 +1757,25 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
 
     # ── Excel Download ──
     st.markdown("---")
-    attrib = monthly_attribution(results, coef_df, active_feature_cols, active_feature_labels)
-    excel_buf = generate_excel_report(
-        results, model_stats, raw_df, feat_df, attrib,
-        active_feature_cols, active_feature_labels, variable_flags, original_names,
-        bey_df=bey_df if bey_df is not None else None,
-        bey_ytw_col=ytw_col_bey, bey_coupon_col=coupon_col_bey, bey_rf_col=rf_col_bey,
-    )
-    if excel_buf:
-        st.download_button(
-            "📥 Download Excel Report",
-            data=excel_buf,
-            file_name=f"HY_RichCheap_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.ml.sheet",
+    try:
+        import traceback as _tb2
+        attrib = monthly_attribution(results, coef_df, active_feature_cols, active_feature_labels)
+        excel_buf = generate_excel_report(
+            results, model_stats, raw_df, feat_df, attrib,
+            active_feature_cols, active_feature_labels, variable_flags, original_names,
+            bey_df=bey_df if bey_df is not None else None,
+            bey_ytw_col=ytw_col_bey, bey_coupon_col=coupon_col_bey, bey_rf_col=rf_col_bey,
         )
+        if excel_buf:
+            st.download_button(
+                "📥 Download Excel Report",
+                data=excel_buf,
+                file_name=f"HY_RichCheap_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.ml.sheet",
+            )
+    except Exception:
+        st.error("**Excel export error — full traceback:**")
+        st.code(_tb2.format_exc())
 
 
 if __name__ == "__main__":
