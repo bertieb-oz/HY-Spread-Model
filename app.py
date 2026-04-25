@@ -71,10 +71,49 @@ FLAG_DESCRIPTIONS = {
     "N": "Excluded",
 }
 
+# ─────────────────────────────────────────────────────────────
+# JPM Historical Default & Recovery Data (Source: JPM Default Monitor)
+# Update annually when JPM publishes new figures.
+# Recovery rate: HY Bonds. Years without recovery data use 40% fallback.
+# ─────────────────────────────────────────────────────────────
+_JPM_DEFAULT_RATES = {
+    1982: 0.0340, 1983: 0.0160, 1984: 0.0210, 1985: 0.0380, 1986: 0.0350,
+    1987: 0.0690, 1988: 0.0280, 1989: 0.0720, 1990: 0.1090, 1991: 0.1150,
+    1992: 0.0440, 1993: 0.0230, 1994: 0.0140, 1995: 0.0280, 1996: 0.0160,
+    1997: 0.0150, 1998: 0.0170, 1999: 0.0410, 2000: 0.0500, 2001: 0.0910,
+    2002: 0.0800, 2003: 0.0330, 2004: 0.0110, 2005: 0.0280, 2006: 0.0090,
+    2007: 0.0040, 2008: 0.0230, 2009: 0.1030, 2010: 0.0080, 2011: 0.0170,
+    2012: 0.0130, 2013: 0.0070, 2014: 0.0290, 2015: 0.0180, 2016: 0.0360,
+    2017: 0.0130, 2018: 0.0180, 2019: 0.0260, 2020: 0.0620, 2021: 0.0030,
+    2022: 0.0080, 2023: 0.0210, 2024: 0.0036, 2025: 0.0099,
+}
+_JPM_RECOVERY_RATES = {                      # HY Bonds; NaN years fall back to 0.40
+    1990: 0.3701, 1991: 0.3666, 1992: 0.4919, 1993: 0.3713, 1994: 0.5373,
+    1995: 0.4760, 1996: 0.6275, 1997: 0.5610, 1998: 0.4163, 1999: 0.3804,
+    2000: 0.2381, 2001: 0.2145, 2002: 0.2969, 2003: 0.4187, 2004: 0.5425,
+    2005: 0.5488, 2006: 0.5502, 2007: 0.2102, 2008: 0.3060, 2009: 0.3000,
+    2010: 0.4820, 2011: 0.5120, 2012: 0.5290, 2013: 0.5270, 2014: 0.5280,
+    2015: 0.3340, 2016: 0.4040, 2017: 0.5770, 2018: 0.3990, 2019: 0.3260,
+    2020: 0.2710, 2021: 0.6050, 2022: 0.6000, 2023: 0.4640, 2024: 0.6120,
+}
+_FALLBACK_RECOVERY = 0.40   # used when year not in _JPM_RECOVERY_RATES
 
-# ─────────────────────────────────────────────────────────────
-# Data loading & feature engineering
-# ─────────────────────────────────────────────────────────────
+
+def _build_jpm_df():
+    """Build a tidy annual DataFrame from JPM constants with loss rate computed."""
+    rows = []
+    for yr, dr in sorted(_JPM_DEFAULT_RATES.items()):
+        rec = _JPM_RECOVERY_RATES.get(yr, _FALLBACK_RECOVERY)
+        rows.append({
+            "year":      yr,
+            "date":      pd.Timestamp(f"{yr}-12-31"),
+            "dr":        dr * 100,          # %
+            "rec":       rec,
+            "loss_rate": dr * (1 - rec) * 100,   # %
+        })
+    return pd.DataFrame(rows)
+
+
 def _match_column(df_columns, aliases):
     """Fuzzy-match a DataFrame column against a list of aliases (case-insensitive)."""
     lower_cols = {}
@@ -795,7 +834,8 @@ def chart_coefficients(model_stats, feature_cols, feature_labels):
 # Excel export
 # ─────────────────────────────────────────────────────────────
 def generate_excel_report(results, model_stats, raw_df, feat_df, attrib_df,
-                          feature_cols, feature_labels, variable_flags, original_names):
+                          feature_cols, feature_labels, variable_flags, original_names,
+                          bey_df=None, bey_ytw_col=None, bey_coupon_col=None, bey_rf_col=None):
     """Generate a multi-sheet Excel workbook."""
     try:
         from openpyxl import Workbook
@@ -975,6 +1015,51 @@ def generate_excel_report(results, model_stats, raw_df, feat_df, attrib_df,
     ws6["A1"].font = Font(bold=True, size=14)
     _auto_width(ws6)
 
+    # --- Sheet 8: BEY Panel ---
+    if bey_df is not None and bey_ytw_col and bey_coupon_col and bey_rf_col:
+        ws_bey = wb.create_sheet("BEY Panel")
+        ws_bey.append(["Break-Even Yield Panel — Altman-Bencivenga (1995)"])
+        ws_bey.merge_cells("A1:G1")
+        ws_bey["A1"].font = Font(bold=True, size=14)
+        ws_bey.append([])
+        ws_bey.append([
+            "Date", "HY YTW (%)", "Risk-Free (%)", "Avg Coupon (%)",
+            "BEY-Selected (%)", "Premium-Selected (bps)", "Implied DR (%)",
+            "BEY-Benign 1.5% (%)", "Premium-Benign (bps)",
+            "BEY-Cycle 2.5% (%)", "Premium-Cycle (bps)",
+            "BEY-Stressed 4.0% (%)", "Premium-Stressed (bps)",
+        ])
+        _style_header(ws_bey, 13)
+        for _, row in bey_df.iterrows():
+            ws_bey.append([
+                row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"]),
+                round(float(row[bey_ytw_col]), 3),
+                round(float(row[bey_rf_col]), 3),
+                round(float(row[bey_coupon_col]), 3),
+                round(float(row["bey"]), 3),
+                round(float(row["premium_bps"]), 1),
+                round(float(row["implied_dr"]), 2) if not np.isnan(row["implied_dr"]) else "",
+                round(float(row["bey_benign"]), 3),
+                round(float(row["premium_bps_benign"]), 1),
+                round(float(row["bey_cycle"]), 3),
+                round(float(row["premium_bps_cycle"]), 1),
+                round(float(row["bey_stressed"]), 3),
+                round(float(row["premium_bps_stressed"]), 1),
+            ])
+        # Colour premium cells green/red
+        for row_idx in range(4, ws_bey.max_row + 1):
+            for col_idx in [6, 9, 11, 13]:  # premium bps columns
+                cell = ws_bey.cell(row=row_idx, column=col_idx)
+                try:
+                    val = float(cell.value) if cell.value != "" else None
+                    if val is not None and val > 0:
+                        cell.fill = PatternFill(start_color="C8E6C9", fill_type="solid")
+                    elif val is not None and val < 0:
+                        cell.fill = PatternFill(start_color="FFCDD2", fill_type="solid")
+                except (TypeError, ValueError):
+                    pass
+        _auto_width(ws_bey)
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -982,9 +1067,211 @@ def generate_excel_report(results, model_stats, raw_df, feat_df, attrib_df,
 
 
 # ─────────────────────────────────────────────────────────────
-# Streamlit App
+# Break-Even Yield (Altman-Bencivenga) Panel
 # ─────────────────────────────────────────────────────────────
-def main():
+
+# Column aliases for BEY panel inputs — matched against original header names
+_YTW_ALIASES     = {"us hy ytw", "hy ytw", "hy yield to worst", "us hy yield to worst",
+                    "high yield ytw", "us hy yld to worst", "hy yld to worst"}
+_COUPON_ALIASES  = {"us hy coupon", "hy coupon", "hy avg coupon", "us hy avg coupon",
+                    "high yield coupon", "hy average coupon", "us hy average coupon"}
+_RF_ALIASES      = {"us 10s", "us 10y", "us 10y treasury yield", "us 10yr",
+                    "us 10 year", "us treasury 10y", "10y treasury", "us 10y yield"}
+
+
+def _detect_bey_columns(original_names):
+    """Return (ytw_col, coupon_col, rf_col) internal names, or None for each if not found."""
+    ytw_col = coupon_col = rf_col = None
+    for internal, orig in original_names.items():
+        key = orig.strip().lower()
+        if key in _YTW_ALIASES:
+            ytw_col = internal
+        elif key in _COUPON_ALIASES:
+            coupon_col = internal
+        elif key in _RF_ALIASES:
+            rf_col = internal
+    return ytw_col, coupon_col, rf_col
+
+
+def calculate_bey_panel(raw_df, original_names, default_rate, recovery_rate=0.40):
+    """
+    Compute Altman-Bencivenga Break-Even Yield and yield premium for every month.
+
+    BEY_t = [ Rf_t  +  Df*(1-Rec)  +  Df*(HYC_t/2) ]  /  (1 - Df)
+
+    Premium_t = HY_YTW_t - BEY_t   (positive = spreads are cheap vs fundamentals)
+
+    Implied default rate (back-solved from AHY = BEY):
+        Df_implied = (AHY - Rf) / (AHY + (1-Rec) + HYC/2)
+
+    All inputs are in % units (e.g. 7.4 for 7.4%); converted to decimals internally.
+
+    Returns (bey_df, ytw_col, coupon_col, rf_col).
+    bey_df is None if required columns are absent.
+    """
+    ytw_col, coupon_col, rf_col = _detect_bey_columns(original_names)
+
+    if any(c is None for c in (ytw_col, coupon_col, rf_col)):
+        return None, ytw_col, coupon_col, rf_col
+
+    missing = [c for c in (ytw_col, coupon_col, rf_col) if c not in raw_df.columns]
+    if missing:
+        return None, ytw_col, coupon_col, rf_col
+
+    bey_df = raw_df[["date", ytw_col, coupon_col, rf_col]].copy().dropna().reset_index(drop=True)
+
+    # Convert % → decimal for calculation
+    ytw    = bey_df[ytw_col]    / 100
+    coupon = bey_df[coupon_col] / 100
+    rf     = bey_df[rf_col]     / 100
+
+    Df  = default_rate  / 100
+    Rec = recovery_rate
+
+    # Selected-assumption BEY and premium
+    bey_decimal          = (rf + Df * (1 - Rec) + Df * coupon / 2) / (1 - Df)
+    bey_df["bey"]        = bey_decimal * 100
+    bey_df["premium"]    = bey_df[ytw_col] - bey_df["bey"]          # %
+    bey_df["premium_bps"] = bey_df["premium"] * 100                  # bps
+
+    # Implied default rate
+    denom = ytw + (1 - Rec) + coupon / 2
+    bey_df["implied_dr"] = np.where(denom > 0, (ytw - rf) / denom * 100, np.nan)
+
+    # Three fixed-scenario BEY lines (for chart reference)
+    for label, dr_pct in [("benign", 1.5), ("cycle", 2.5), ("stressed", 4.0)]:
+        dr_d = dr_pct / 100
+        bey_s = (rf + dr_d * (1 - Rec) + dr_d * coupon / 2) / (1 - dr_d)
+        bey_df[f"bey_{label}"]         = bey_s * 100
+        bey_df[f"premium_bps_{label}"] = (bey_df[ytw_col] - bey_df[f"bey_{label}"]) * 100
+
+    return bey_df, ytw_col, coupon_col, rf_col
+
+
+def chart_bey_premium(bey_df, ytw_col, default_rate):
+    """Two-panel chart: YTW vs BEY scenarios (top) | Premium in bps (bottom)."""
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=(
+            "HY Yield to Worst vs Break-Even Yield (three default-rate scenarios)",
+            f"Yield Premium vs BEY — {default_rate:.1f}% default rate assumption (bps)",
+        ),
+        vertical_spacing=0.13,
+        row_heights=[0.55, 0.45],
+    )
+
+    # Top: absolute yield levels
+    fig.add_trace(go.Scatter(
+        x=bey_df["date"], y=bey_df[ytw_col],
+        name="HY Yield to Worst", line=dict(color="#2980b9", width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=bey_df["date"], y=bey_df["bey_benign"],
+        name="BEY — 1.5% DR (benign)", line=dict(color="#27ae60", width=1.3, dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=bey_df["date"], y=bey_df["bey_cycle"],
+        name="BEY — 2.5% DR (cycle avg)", line=dict(color="#f39c12", width=1.3, dash="dash")), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=bey_df["date"], y=bey_df["bey_stressed"],
+        name="BEY — 4.0% DR (stressed)", line=dict(color="#e74c3c", width=1.3, dash="longdash")), row=1, col=1)
+
+    # Bottom: premium bars for selected assumption
+    colors = ["#27ae60" if v >= 0 else "#e74c3c" for v in bey_df["premium_bps"]]
+    fig.add_trace(go.Bar(
+        x=bey_df["date"], y=bey_df["premium_bps"],
+        name=f"Premium ({default_rate:.1f}% DR)", marker_color=colors,
+        showlegend=True), row=2, col=1)
+    fig.add_hline(y=0, line_color="black", line_width=0.8, row=2, col=1)
+
+    fig.update_layout(
+        template="plotly_white", height=580,
+        legend=dict(orientation="h", y=1.07, x=0),
+        margin=dict(t=70),
+    )
+    fig.update_yaxes(title_text="Yield (%)", row=1, col=1)
+    fig.update_yaxes(title_text="Premium (bps)", row=2, col=1)
+    return fig
+
+def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
+    """
+    Overlay chart combining:
+      - Annual JPM historical default rate (bars, full height)
+      - Annual JPM credit loss rate = DR × (1 – recovery) (bars, stacked inside DR)
+      - Monthly model-implied default rate from BEY calculation (line)
+      - Long-run and post-GFC average reference lines
+
+    Bars represent the annual JPM actuals; the line is the market's forward
+    pricing of default risk derived from current HY yields.
+    """
+    jpm = _build_jpm_df()
+
+    # ── Reference line values ──
+    full_cycle_avg  = jpm["dr"].mean()          # 1982–2025
+    post_gfc_avg    = jpm[jpm["year"] >= 2010]["dr"].mean()
+
+    fig = go.Figure()
+
+    # ── Bar layer 1: recovery portion (top of bar — lighter shade) ──
+    # Stacking: bottom = loss_rate, top = recovery portion = dr - loss_rate
+    recovery_portion = jpm["dr"] - jpm["loss_rate"]
+    fig.add_trace(go.Bar(
+        x=jpm["date"], y=recovery_portion,
+        base=jpm["loss_rate"],              # sits on top of loss_rate bars
+        name="Recovered (DR × Recovery Rate)",
+        marker_color="rgba(41,128,185,0.35)",
+        marker_line_width=0,
+        hovertemplate="<b>%{x|%Y}</b><br>Default Rate: %{customdata[0]:.2f}%<br>Recovery Rate: %{customdata[1]:.1%}<extra></extra>",
+        customdata=list(zip(jpm["dr"], jpm["rec"])),
+    ))
+
+    # ── Bar layer 2: credit loss portion (bottom — darker shade) ──
+    fig.add_trace(go.Bar(
+        x=jpm["date"], y=jpm["loss_rate"],
+        name="Credit Loss Rate (DR × (1 – Rec))",
+        marker_color="rgba(41,128,185,0.80)",
+        marker_line_width=0,
+        hovertemplate="<b>%{x|%Y}</b><br>Loss Rate: %{y:.2f}%<extra></extra>",
+    ))
+
+    # ── Reference lines ──
+    fig.add_hline(
+        y=full_cycle_avg, line_dash="dot", line_color="#7f8c8d", line_width=1.2,
+        annotation_text=f"Full-cycle avg {full_cycle_avg:.1f}%",
+        annotation_position="top right", annotation_font_size=11,
+    )
+    fig.add_hline(
+        y=post_gfc_avg, line_dash="dash", line_color="#95a5a6", line_width=1.2,
+        annotation_text=f"Post-GFC avg {post_gfc_avg:.1f}%",
+        annotation_position="bottom right", annotation_font_size=11,
+    )
+
+    # ── Implied default rate line (monthly, from model) ──
+    if bey_df is not None and implied_dr_col in bey_df.columns:
+        impl = bey_df.dropna(subset=[implied_dr_col])
+        fig.add_trace(go.Scatter(
+            x=impl["date"], y=impl[implied_dr_col],
+            name="Model-Implied Default Rate (BEY)",
+            line=dict(color="#e74c3c", width=2.2),
+            mode="lines",
+            hovertemplate="<b>%{x|%b %Y}</b><br>Implied DR: %{y:.1f}%<extra></extra>",
+        ))
+
+    fig.update_layout(
+        barmode="stack",
+        title=dict(
+            text="JPM Annual HY Default & Credit Loss Rates vs Model-Implied Default Rate",
+            font=dict(size=14),
+        ),
+        xaxis_title="Year",
+        yaxis_title="Rate (%)",
+        template="plotly_white",
+        height=430,
+        legend=dict(orientation="h", y=1.10, x=0),
+        margin=dict(t=80),
+        hovermode="x unified",
+    )
+    return fig
+
+
     # ── Sidebar ──
     st.sidebar.image("https://img.icons8.com/color/96/combo-chart.png", width=60)
     st.sidebar.title("HY Rich/Cheap Model")
@@ -1021,9 +1308,24 @@ def main():
         help="Z-score above this → CHEAP signal (buy). Lower = more sensitive."
     )
     rich_thresh = st.sidebar.slider(
-        "Rich Threshold (σ)", 1.0, 3.0, 2.0, 0.1,
-        help="Z-score below negative of this → RICH signal (sell). Higher = stronger conviction required."
+        "Rich Threshold (σ)", 1.0, 3.0, 1.5, 0.1,
+        help="Z-score below negative of this → RICH signal (sell). Default 1.5σ calibrated for strategic institutional allocators."
     )
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ⚖️ BEY Panel Settings")
+    bey_default_rate = st.sidebar.slider(
+        "Default Rate Assumption (%)", 0.5, 6.0, 2.5, 0.1,
+        help=(
+            "Annual HY default rate used for Break-Even Yield calculation.\n\n"
+            "**JPM benchmarks (1982–2025):**\n"
+            "- Current LTM (Mar-26): ~1.2% excl. distressed exchanges\n"
+            "- Post-GFC average (2010–2025): 1.8%\n"
+            "- Full-cycle average (1982–2025): 3.3%\n"
+            "- Altman (1995) calibration: 4.1%"
+        )
+    )
+    st.sidebar.caption("Recovery rate fixed at 40% (Altman/JPM historical)")
 
     st.sidebar.markdown("---")
 
@@ -1260,7 +1562,126 @@ def main():
     else:
         st.info("Attribution data not yet available (requires at least 2 regression windows).")
 
-    # ── Section 5: Regression Statistics ──
+    # ── Section 5: BEY Fundamental Anchor ──
+    st.markdown("---")
+    st.subheader("⚖️ Fundamental Anchor — Break-Even Yield Premium")
+    st.caption(
+        "Based on Altman & Bencivenga (1995). Asks: given expected defaults and recoveries, "
+        "is the market offering adequate compensation? Complements the OLS z-score signal with a "
+        "bottom-up fundamental valuation anchor."
+    )
+
+    bey_df, ytw_col_bey, coupon_col_bey, rf_col_bey = calculate_bey_panel(
+        raw_df, original_names, bey_default_rate
+    )
+
+    if bey_df is not None and len(bey_df) > 0:
+        lb = bey_df.iloc[-1]
+
+        # ── Metric row ──
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("HY Yield to Worst", f"{lb[ytw_col_bey]:.2f}%",
+                  help="Bloomberg HY index yield-to-worst (absolute yield, not spread)")
+        c2.metric(f"Break-Even Yield ({bey_default_rate:.1f}% DR)", f"{lb['bey']:.2f}%",
+                  help="Minimum yield required to break even vs Treasuries at the selected default rate assumption")
+        prem_bps = lb["premium_bps"]
+        c3.metric(
+            "Yield Premium", f"{prem_bps:+.0f} bps",
+            delta="Cheap vs BEY" if prem_bps >= 0 else "Rich vs BEY",
+            delta_color="normal" if prem_bps >= 0 else "inverse",
+            help="Positive = HY is offering more than required to compensate for default risk (cheap). "
+                 "Negative = HY is not covering default risk compensation (rich)."
+        )
+        c4.metric("Implied Default Rate", f"{lb['implied_dr']:.1f}%",
+                  help="The annual default rate the market is implicitly pricing given current "
+                       "YTW vs risk-free rate. Compare to: current LTM ~1.2%, post-GFC avg 1.8%, "
+                       "full-cycle avg 3.3% (JPM 1982–2025).")
+
+        # ── Scenario comparison row ──
+        st.markdown("**Premium across default-rate scenarios:**")
+        sc1, sc2, sc3 = st.columns(3)
+        for col_st, label, key in [
+            (sc1, "Benign — 1.5% DR", "benign"),
+            (sc2, "Cycle Avg — 2.5% DR", "cycle"),
+            (sc3, "Stressed — 4.0% DR", "stressed"),
+        ]:
+            p = lb[f"premium_bps_{key}"]
+            col_st.metric(
+                label, f"{p:+.0f} bps",
+                delta="Cheap vs BEY" if p >= 0 else "Rich vs BEY",
+                delta_color="normal" if p >= 0 else "inverse",
+            )
+
+        # ── Chart: YTW vs BEY scenarios / premium ──
+        st.plotly_chart(chart_bey_premium(bey_df, ytw_col_bey, bey_default_rate), use_container_width=True)
+
+        # ── Chart: historical default rate vs implied DR ──
+        st.plotly_chart(chart_default_rate_history(bey_df), use_container_width=True)
+        st.caption(
+            "Bars show JPM annual HY default rates split into economic loss (dark) and recovered portion (light). "
+            "Red line shows the market-implied default rate derived monthly from the BEY model. "
+            "Reference lines: full-cycle mean 3.3% (1982–2025), post-GFC mean 1.8% (2010–2025). "
+            "Recovery rates: JPM actuals 1990–2024; 40% fallback for 1982–1989 and 2025."
+        )
+
+        # ── Interpretation narrative ──
+        implied_dr = lb["implied_dr"]
+        if prem_bps > 100:
+            prem_interp = "materially above break-even — a clear fundamental buying signal"
+        elif prem_bps > 0:
+            prem_interp = "modestly above break-even — adequate but not compelling compensation"
+        elif prem_bps > -100:
+            prem_interp = "modestly below break-even — spread income may not cover expected defaults"
+        else:
+            prem_interp = "materially below break-even — spreads appear rich on a fundamental basis"
+
+        st.info(
+            f"**Fundamental Read ({lb['date'].strftime('%b %Y')}):** "
+            f"At a **{bey_default_rate:.1f}%** default rate assumption, the HY market is offering a "
+            f"**{prem_bps:+.0f} bps** yield premium above break-even — {prem_interp}. "
+            f"Current spreads imply the market is pricing in an annual default rate of "
+            f"**{implied_dr:.1f}%** "
+            f"(vs JPM current LTM ~1.2%, post-GFC avg 1.8%, full-cycle avg 3.3%). "
+            f"Recovery rate: 40% (Altman calibration; JPM 1990–2018 mean: 44%)."
+        )
+
+        # ── Historical BEY table (collapsible) ──
+        with st.expander("📋 Historical BEY & Premium Table", expanded=False):
+            disp = bey_df[["date", ytw_col_bey, rf_col_bey, coupon_col_bey,
+                           "bey", "premium_bps", "implied_dr"]].copy()
+            disp.columns = ["Date", "YTW (%)", "Risk-Free (%)", "Avg Coupon (%)",
+                            "BEY (%)", "Premium (bps)", "Implied DR (%)"]
+            st.dataframe(
+                disp.sort_values("Date", ascending=False).style.format({
+                    "Date": lambda x: x.strftime("%Y-%m-%d"),
+                    "YTW (%)": "{:.2f}",
+                    "Risk-Free (%)": "{:.2f}",
+                    "Avg Coupon (%)": "{:.2f}",
+                    "BEY (%)": "{:.2f}",
+                    "Premium (bps)": "{:+.0f}",
+                    "Implied DR (%)": "{:.1f}",
+                }).apply(lambda col: [
+                    "background-color: #c8e6c9" if v > 0 else
+                    "background-color: #ffcdd2" if v < 0 else ""
+                    for v in col
+                ] if col.name == "Premium (bps)" else [""] * len(col)),
+                use_container_width=True,
+                height=380,
+            )
+    else:
+        missing = []
+        if ytw_col_bey is None:
+            missing.append("HY Yield to Worst (e.g. 'US HY YTW')")
+        if coupon_col_bey is None:
+            missing.append("HY Avg Coupon (e.g. 'US HY Coupon')")
+        if rf_col_bey is None:
+            missing.append("US 10Y Yield (e.g. 'US 10s')")
+        st.info(
+            f"ℹ️ BEY Panel requires these columns in your Excel file (flagged `N`): "
+            f"{', '.join(missing) if missing else 'columns not found in data'}."
+        )
+
+    # ── Section 6: Regression Statistics ──
     with st.expander("📋 Regression Statistics", expanded=False):
         stats_df = pd.DataFrame({
             "Feature": [active_feature_labels.get(c, c) for c in active_feature_cols],
@@ -1298,7 +1719,7 @@ def main():
             st.markdown(f"**Any SE = 0?** {any(model_stats['std_errors'] == 0)}")
             st.markdown(f"**Features used:** {active_feature_cols}")
 
-    # ── Section 6: Historical Signals ──
+    # ── Section 7: Historical Signals ──
     with st.expander("📅 Historical Signals Table", expanded=False):
         hist = results.dropna(subset=["predicted"])[["date", "hy_spread", "predicted", "residual", "z_score", "signal"]].copy()
         hist.columns = ["Date", "HY Spread", "Predicted", "Residual", "Z-Score", "Signal"]
@@ -1327,7 +1748,9 @@ def main():
     attrib = monthly_attribution(results, coef_df, active_feature_cols, active_feature_labels)
     excel_buf = generate_excel_report(
         results, model_stats, raw_df, feat_df, attrib,
-        active_feature_cols, active_feature_labels, variable_flags, original_names
+        active_feature_cols, active_feature_labels, variable_flags, original_names,
+        bey_df=bey_df if bey_df is not None else None,
+        bey_ytw_col=ytw_col_bey, bey_coupon_col=coupon_col_bey, bey_rf_col=rf_col_bey,
     )
     if excel_buf:
         st.download_button(
