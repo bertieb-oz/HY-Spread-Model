@@ -1184,8 +1184,14 @@ def chart_bey_premium(bey_df, ytw_col, default_rate):
 
     fig.update_layout(
         template="plotly_white", height=580,
-        legend=dict(orientation="h", y=1.07, x=0),
-        margin=dict(t=70),
+        legend=dict(
+            orientation="v",
+            x=1.02, y=1,
+            xanchor="left", yanchor="top",
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="#cccccc", borderwidth=1,
+        ),
+        margin=dict(t=60, r=220),
     )
     fig.update_yaxes(title_text="Yield (%)", row=1, col=1)
     fig.update_yaxes(title_text="Premium (bps)", row=2, col=1)
@@ -1210,14 +1216,15 @@ def chart_default_rate_history(bey_df, implied_dr_col="implied_dr"):
 
     fig = go.Figure()
 
-    # ── Bar layer 1: recovery portion (top of bar — lighter shade) ──
-    # Stacking: bottom = loss_rate, top = recovery portion = dr - loss_rate
+    # ── Bar layer 1: total default rate (light blue, full bar height) ──
+    # Stacked on top of loss_rate to reach the full DR height.
+    # Label describes what the FULL bar represents.
     recovery_portion = jpm["dr"] - jpm["loss_rate"]
     fig.add_trace(go.Bar(
         x=jpm["date"], y=recovery_portion,
-        base=jpm["loss_rate"],              # sits on top of loss_rate bars
-        name="Recovered (DR × Recovery Rate)",
-        marker_color="rgba(41,128,185,0.35)",
+        base=jpm["loss_rate"],
+        name="Default Rate (total bar)",
+        marker_color="rgba(41,128,185,0.30)",
         marker_line_width=0,
         hovertemplate="<b>%{x|%Y}</b><br>Default Rate: %{customdata[0]:.2f}%<br>Recovery Rate: %{customdata[1]:.1%}<extra></extra>",
         customdata=list(zip(jpm["dr"], jpm["rec"])),
@@ -1628,9 +1635,10 @@ def main():
             st.plotly_chart(chart_bey_premium(bey_df, ytw_col_bey, bey_default_rate), use_container_width=True)
             st.plotly_chart(chart_default_rate_history(bey_df), use_container_width=True)
             st.caption(
-                "Bars show JPM annual HY default rates split into economic loss (dark) and recovered portion (light). "
-                "Red line shows the market-implied default rate derived monthly from the BEY model. "
-                "Reference lines: full-cycle mean 3.3% (1982–2025), post-GFC mean 1.8% (2010–2025). "
+                "Bars show JPM annual HY default rates: dark blue = credit loss rate (DR × (1–recovery)); "
+                "full bar height = total default rate. "
+                "Red line = market-implied default rate from BEY model (monthly). "
+                "Reference lines: full-cycle avg 3.3% (1982–2025), post-GFC avg 1.8% (2010–2025). "
                 "Recovery rates: JPM actuals 1990–2024; 40% fallback for 1982–1989 and 2025."
             )
 
