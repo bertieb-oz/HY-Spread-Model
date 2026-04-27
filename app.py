@@ -1938,7 +1938,7 @@ def main():
         _material   = _attrib_tmp[_attrib_tmp["Contribution (bps)"].abs() >= 0.5].copy()
         _material   = _material.sort_values("Contribution (bps)", key=abs, ascending=False)
         net_move_bps = _attrib_tmp["Contribution (bps)"].sum()
-        top_driver   = _material.iloc[0]["Feature"] if len(_material) > 0 else "N/A"
+        top_driver   = _material.iloc[0]["Factor"] if len(_material) > 0 else "N/A"
         top_driver_bps = float(_material.iloc[0]["Contribution (bps)"]) if len(_material) > 0 else 0.0
 
         # OLS signal language
