@@ -1918,6 +1918,185 @@ def main():
             height=400,
         )
 
+    # ── Section 8: Investment Conclusion ──
+    st.markdown("---")
+    st.subheader("🎯 Investment Conclusion")
+
+    try:
+        # ── Gather all inputs ──
+        z_score       = float(latest["z_score"])
+        actual_spread = float(latest["hy_spread"])
+        pred_spread   = float(latest["predicted"])
+        residual_pct  = float(latest["residual"])
+        residual_bps  = residual_pct * 100
+        r2            = float(model_stats["r2"])
+        as_of         = latest["date"].strftime("%B %Y")
+        data_years    = round((results["date"].max() - results["date"].min()).days / 365.25, 0)
+
+        # Attribution: top driver this month (primary driver label + bps)
+        _attrib_tmp = monthly_attribution(results, coef_df, active_feature_cols, active_feature_labels)
+        _material   = _attrib_tmp[_attrib_tmp["Contribution (bps)"].abs() >= 0.5].copy()
+        _material   = _material.sort_values("Contribution (bps)", key=abs, ascending=False)
+        net_move_bps = _attrib_tmp["Contribution (bps)"].sum()
+        top_driver   = _material.iloc[0]["Feature"] if len(_material) > 0 else "N/A"
+        top_driver_bps = float(_material.iloc[0]["Contribution (bps)"]) if len(_material) > 0 else 0.0
+
+        # OLS signal language
+        if signal == "CHEAP":
+            ols_read = (
+                f"The macro fair-value model rates spreads as **CHEAP** (z-score: "
+                f"{z_score:+.2f}), with actual spreads of {actual_spread*100:.0f}bps "
+                f"sitting {abs(residual_bps):.0f}bps **wider** than the model's "
+                f"fair-value estimate of {pred_spread*100:.0f}bps. "
+                f"The macro environment warrants spread compression from here."
+            )
+            ols_conviction = "positive"
+        elif signal == "RICH":
+            ols_read = (
+                f"The macro fair-value model rates spreads as **RICH** (z-score: "
+                f"{z_score:+.2f}), with actual spreads of {actual_spread*100:.0f}bps "
+                f"sitting {abs(residual_bps):.0f}bps **tighter** than the model's "
+                f"fair-value estimate of {pred_spread*100:.0f}bps. "
+                f"The macro environment does not support current spread levels."
+            )
+            ols_conviction = "negative"
+        else:
+            direction = "tighter" if residual_bps < 0 else "wider"
+            ols_read = (
+                f"The macro fair-value model rates spreads as **NEUTRAL** (z-score: "
+                f"{z_score:+.2f}), with actual spreads of {actual_spread*100:.0f}bps "
+                f"sitting {abs(residual_bps):.0f}bps {direction} than the model's "
+                f"fair-value estimate of {pred_spread*100:.0f}bps — "
+                f"within the neutral band but on the {'rich' if residual_bps < 0 else 'cheap'} side."
+            )
+            ols_conviction = "cautious" if residual_bps < 0 else "mildly constructive"
+
+        # Net model move context
+        move_dir = "wider" if net_move_bps > 0 else "tighter"
+        move_context = (
+            f"The model's fair-value spread moved {move_dir} by "
+            f"**{abs(net_move_bps):.0f}bps** this month, driven primarily by "
+            f"{top_driver} ({top_driver_bps:+.0f}bps)."
+        )
+
+        # BEY language — only if available
+        if bey_df is not None and len(bey_df) > 0:
+            lb_s = bey_df.iloc[-1]
+            _prem_bps_s    = float(lb_s["premium_bps"])
+            _implied_dr_s  = float(lb_s["implied_dr"])
+            _prem_stressed = float(lb_s["premium_bps_stressed"])
+            _prem_pctile_s = int((bey_df["premium_bps"].dropna() < _prem_bps_s).mean() * 100)
+            _hist_median_s = float(bey_df["premium_bps"].dropna().median())
+
+            bey_intro = (
+                f"The fundamental BEY model independently confirms this read: "
+                f"at a {bey_default_rate:.1f}% default rate assumption, HY is offering "
+                f"**{_prem_bps_s:+.0f}bps** above break-even — a premium sitting at "
+                f"just the **{_prem_pctile_s}th percentile** of the available "
+                f"~{int(data_years)}-year history (median: {_hist_median_s:+.0f}bps). "
+                f"A note on that history: the data window is heavily influenced by "
+                f"the GFC era, when spreads — and therefore BEY premiums — reached "
+                f"extreme levels; the long-run median will compress as that period "
+                f"recedes and as more benign post-2010 years dominate the sample. "
+                f"The market is implying a perpetual annual default rate of "
+                f"**{_implied_dr_s:.1f}%** — "
+                f"{'above' if _implied_dr_s > bey_default_rate else 'below'} the "
+                f"{bey_default_rate:.1f}% assumption, which is why the premium is "
+                f"{'positive' if _prem_bps_s > 0 else 'negative'}: the two readings "
+                f"are the same model viewed from opposite directions."
+            )
+
+            if _prem_stressed > 0:
+                bey_scenario = (
+                    f"Importantly, the premium remains positive even under the stressed "
+                    f"4.0% default scenario (+{_prem_stressed:.0f}bps), suggesting "
+                    f"adequate — if thin — fundamental value survives a material "
+                    f"deterioration in the default cycle."
+                )
+            else:
+                bey_scenario = (
+                    f"Under the stressed 4.0% default scenario the premium turns "
+                    f"negative ({_prem_stressed:+.0f}bps), meaning fundamental "
+                    f"compensation is contingent on defaults remaining contained — "
+                    f"a risk worth monitoring in the current macro environment."
+                )
+
+            # Combined signal read
+            if signal == "CHEAP" and _prem_bps_s > 100:
+                combined = (
+                    f"Both frameworks are in alignment: macro and fundamental signals "
+                    f"are both constructive, providing higher-conviction support for "
+                    f"adding HY exposure at current spread levels."
+                )
+            elif signal == "CHEAP" and _prem_bps_s > 0:
+                combined = (
+                    f"The macro model is constructive and the fundamental premium is "
+                    f"positive, but thin. The directional case for HY exists, though "
+                    f"the margin of safety on a fundamental basis is limited."
+                )
+            elif signal == "NEUTRAL" and _prem_bps_s > 0:
+                combined = (
+                    f"The two frameworks present a coherent but cautiously positioned "
+                    f"picture: spreads are fairly valued on a macro basis, and the "
+                    f"fundamental premium — while positive — offers a narrow cushion. "
+                    f"For long-term allocators, the current entry point warrants "
+                    f"patience: the fundamental case exists, but the margin of safety "
+                    f"is narrow and macro volatility indicators are already elevated."
+                )
+            elif signal == "NEUTRAL" and _prem_bps_s <= 0:
+                combined = (
+                    f"The macro model is neutral and the fundamental premium has "
+                    f"turned negative — a rare combination that warrants caution. "
+                    f"HY is neither offering a spread cushion on a macro basis nor "
+                    f"adequate default compensation on a fundamental basis."
+                )
+            elif signal == "RICH":
+                combined = (
+                    f"Both frameworks are cautionary. The macro model flags spreads "
+                    f"as rich relative to the current environment, and the thin "
+                    f"fundamental premium offers limited buffer against any "
+                    f"deterioration in either macro conditions or default expectations."
+                )
+            else:
+                combined = (
+                    f"The two frameworks present a mixed picture that warrants "
+                    f"careful monitoring before committing additional risk."
+                )
+
+            conclusion_text = (
+                f"{ols_read} {move_context}\n\n"
+                f"{bey_intro} {bey_scenario}\n\n"
+                f"**Overall:** {combined}"
+            )
+
+        else:
+            # OLS-only conclusion (no BEY data)
+            conclusion_text = (
+                f"{ols_read} {move_context}\n\n"
+                f"*(BEY fundamental panel unavailable — upload HY YTW and "
+                f"Avg Coupon columns for a full cross-framework conclusion.)*"
+            )
+
+        st.markdown(
+            f"<div style='background:#f0f7ff; border-left:4px solid #2980b9; "
+            f"border-radius:6px; padding:20px 24px; font-size:15px; line-height:1.7;'>"
+            f"{conclusion_text.replace(chr(10), '<br>')}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"Signal as of {as_of}. OLS model: {int(data_years)}-year rolling window "
+            f"(R²: {r2:.3f}). BEY: Altman-Bencivenga (1995), "
+            f"{bey_default_rate:.1f}% default rate, 40% recovery rate."
+            if bey_df is not None else
+            f"Signal as of {as_of}. OLS model R²: {r2:.3f}."
+        )
+
+    except Exception:
+        import traceback as _tb3
+        st.warning("Investment conclusion could not be generated.")
+        st.code(_tb3.format_exc())
+
     # ── Excel Download ──
     st.markdown("---")
     try:
