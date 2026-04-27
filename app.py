@@ -99,6 +99,7 @@ _JPM_RECOVERY_RATES = {                      # HY Bonds; NaN years fall back to 
 _FALLBACK_RECOVERY = 0.40   # used when year not in _JPM_RECOVERY_RATES
 
 
+@st.cache_data
 def _build_jpm_df():
     """Build a tidy annual DataFrame from JPM constants with loss rate computed."""
     rows = []
@@ -1093,6 +1094,7 @@ def _detect_bey_columns(original_names):
     return ytw_col, coupon_col, rf_col
 
 
+@st.cache_data
 def calculate_bey_panel(raw_df, original_names, default_rate, recovery_rate=0.40):
     """
     Compute Altman-Bencivenga Break-Even Yield and yield premium for every month.
@@ -1643,24 +1645,155 @@ def main():
             )
 
             # ── Interpretation narrative ──
-            implied_dr = lb["implied_dr"]
-            if prem_bps > 100:
-                prem_interp = "materially above break-even — a clear fundamental buying signal"
+            implied_dr    = float(lb["implied_dr"])
+            ytw_now       = float(lb[ytw_col_bey])
+            bey_now       = float(lb["bey"])
+            rf_now        = float(lb[rf_col_bey])
+            coupon_now    = float(lb[coupon_col_bey])
+            prem_benign   = float(lb["premium_bps_benign"])
+            prem_cycle    = float(lb["premium_bps_cycle"])
+            prem_stressed = float(lb["premium_bps_stressed"])
+
+            # Historical premium context — where does today sit in the distribution?
+            hist_prem = bey_df["premium_bps"].dropna()
+            prem_pctile = int((hist_prem < prem_bps).mean() * 100)
+            hist_min    = hist_prem.min()
+            hist_max    = hist_prem.max()
+            hist_median = hist_prem.median()
+
+            # Implied DR vs benchmarks
+            dr_vs_ltm      = implied_dr - 1.2    # vs JPM Mar-26 LTM
+            dr_vs_postgfc  = implied_dr - 1.8    # vs post-GFC avg
+            dr_vs_cycle    = implied_dr - 3.3    # vs full-cycle avg
+
+            # Directional language helpers
+            def _vs(val, label):
+                sign = "above" if val > 0 else "below"
+                return f"{abs(val):.1f}pp {sign} {label}"
+
+            # Premium adequacy read
+            if prem_bps > 200:
+                adequacy = "materially generous"
+                adequacy_detail = (
+                    "The spread cushion is well in excess of what is required to compensate "
+                    "for historical default losses. This is the zone typically associated with "
+                    "post-crisis dislocations when risk aversion has overshot fundamentals."
+                )
+            elif prem_bps > 100:
+                adequacy = "comfortably adequate"
+                adequacy_detail = (
+                    "Investors are being paid a meaningful buffer above the minimum required "
+                    "to break even against expected defaults. HY offers genuine fundamental "
+                    "value at this level."
+                )
             elif prem_bps > 0:
-                prem_interp = "modestly above break-even — adequate but not compelling compensation"
+                adequacy = "marginally adequate"
+                adequacy_detail = (
+                    "The market is offering just enough to cover expected default losses, "
+                    "but the buffer is thin. Spreads could move rich quickly if default "
+                    "expectations rise modestly."
+                )
             elif prem_bps > -100:
-                prem_interp = "modestly below break-even — spread income may not cover expected defaults"
+                adequacy = "marginally insufficient"
+                adequacy_detail = (
+                    "At current yields, investors are not fully compensated for expected "
+                    "default losses on the historical-average default rate assumption. The "
+                    "market is implicitly assuming a more benign default environment than "
+                    "the long-run average warrants."
+                )
             else:
-                prem_interp = "materially below break-even — spreads appear rich on a fundamental basis"
+                adequacy = "materially insufficient"
+                adequacy_detail = (
+                    "Spreads are meaningfully below the level required to compensate for "
+                    "default risk on any reasonable assumption. This is the zone associated "
+                    "with late-cycle spread compression, where carry is attractive but "
+                    "downside asymmetry is elevated."
+                )
+
+            # Implied DR interpretation
+            if implied_dr < 1.5:
+                dr_read = (
+                    f"an exceptionally benign default environment — below even the current "
+                    f"LTM rate of ~1.2% and well inside the post-GFC average of 1.8%. "
+                    f"This level is consistent with a soft-landing / no-recession base case."
+                )
+            elif implied_dr < 2.5:
+                dr_read = (
+                    f"a mild default cycle — broadly consistent with the post-GFC average "
+                    f"of 1.8% and the current LTM rate of ~1.2%, suggesting the market is "
+                    f"pricing modest but not severe credit stress."
+                )
+            elif implied_dr < 4.0:
+                dr_read = (
+                    f"a moderate default cycle — above the post-GFC average (1.8%) but "
+                    f"below the full-cycle mean (3.3%). The market is pricing meaningful "
+                    f"credit deterioration without pricing a recession-level default wave."
+                )
+            elif implied_dr < 7.0:
+                dr_read = (
+                    f"a significant default cycle — at or above the full-cycle average "
+                    f"of 3.3% and approaching recession-era levels. The market is pricing "
+                    f"material credit stress, consistent with late-cycle or recessionary conditions."
+                )
+            else:
+                dr_read = (
+                    f"an extreme stress scenario — approaching GFC-era levels (2009: 10.3%, "
+                    f"1991: 11.5%). This level of implied default pricing is historically "
+                    f"associated with acute financial system stress, not just a credit cycle turn."
+                )
+
+            # Scenario robustness commentary
+            all_positive = prem_benign > 0 and prem_cycle > 0 and prem_stressed > 0
+            two_positive = sum([prem_benign > 0, prem_cycle > 0, prem_stressed > 0]) >= 2
+            if all_positive:
+                scenario_read = (
+                    f"Importantly, the premium is **positive across all three default-rate "
+                    f"scenarios** — including the stressed 4.0% assumption. This means HY "
+                    f"offers fundamental value even if the default cycle deteriorates "
+                    f"materially from current levels."
+                )
+            elif two_positive:
+                scenario_read = (
+                    f"The premium is positive under the benign (1.5%) and cycle-average "
+                    f"(2.5%) scenarios, but turns negative under the stressed (4.0%) "
+                    f"assumption. Fundamental value holds unless defaults rise sharply "
+                    f"above current levels."
+                )
+            else:
+                scenario_read = (
+                    f"The premium is negative under the cycle-average and stressed "
+                    f"scenarios, suggesting current spreads only offer adequate compensation "
+                    f"if the default environment remains unusually benign."
+                )
 
             st.info(
-                f"**Fundamental Read ({lb['date'].strftime('%b %Y')}):** "
-                f"At a **{bey_default_rate:.1f}%** default rate assumption, the HY market is offering a "
-                f"**{prem_bps:+.0f} bps** yield premium above break-even — {prem_interp}. "
-                f"Current spreads imply the market is pricing in an annual default rate of "
-                f"**{implied_dr:.1f}%** "
-                f"(vs JPM current LTM ~1.2%, post-GFC avg 1.8%, full-cycle avg 3.3%). "
-                f"Recovery rate: 40% (Altman calibration; JPM 1990–2018 mean: 44%)."
+                f"**Fundamental Read — {lb['date'].strftime('%B %Y')}**\n\n"
+                f"**What this model measures:** The Break-Even Yield (BEY) is the minimum "
+                f"yield the HY market must offer for investors to break even against "
+                f"Treasuries after accounting for expected default losses and recoveries. "
+                f"It is computed as: BEY = [Risk-Free Rate + Default Rate × (1 − Recovery) "
+                f"+ Default Rate × (Avg Coupon / 2)] / (1 − Default Rate). "
+                f"The *Yield Premium* is simply the difference between the market's actual "
+                f"yield-to-worst ({ytw_now:.2f}%) and this break-even hurdle "
+                f"({bey_now:.2f}% at {bey_default_rate:.1f}% default rate assumption). "
+                f"A positive premium means investors are being more than adequately "
+                f"compensated for default risk; a negative premium means they are not.\n\n"
+                f"**Current assessment — compensation is {adequacy}:** "
+                f"At a {bey_default_rate:.1f}% default rate assumption (40% recovery rate), "
+                f"the HY market is offering a yield premium of **{prem_bps:+.0f} bps** "
+                f"above break-even. {adequacy_detail} "
+                f"Within the available data history, today's premium sits at the "
+                f"**{prem_pctile}th percentile** (range: {hist_min:+.0f} to "
+                f"{hist_max:+.0f} bps; median: {hist_median:+.0f} bps).\n\n"
+                f"**What the market is implying:** Back-solving the BEY formula, the "
+                f"current HY yield of {ytw_now:.2f}% — against a risk-free rate of "
+                f"{rf_now:.2f}% and average coupon of {coupon_now:.2f}% — implies the "
+                f"market is pricing in an annual default rate of **{implied_dr:.1f}%**. "
+                f"This represents {dr_read}\n\n"
+                f"**Scenario robustness:** {scenario_read}\n\n"
+                f"*Methodology: Altman & Bencivenga (1995). Recovery rate fixed at 40% "
+                f"(conservative vs JPM 1990–2024 mean of 44%). Default rate assumption "
+                f"is user-selectable via the sidebar slider.*"
             )
 
             # ── Historical BEY table ──
