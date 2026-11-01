@@ -1,56 +1,80 @@
-# HY Spread Rich/Cheap Model
+# Bond Yield Rich/Cheap Model
 
-A Streamlit web app that uses rolling multiple linear regression to determine if US High Yield credit spreads are **rich** (too tight), **cheap** (too wide), or **neutral** relative to fundamental market drivers.
+A Streamlit web application that uses **rolling multiple linear regression (OLS)** to determine whether US and Australian 10-year government bond yields are **RICH** (too low vs fundamentals), **CHEAP** (too high), or **NEUTRAL**.
 
-## Quick Start (Local)
+## Quick Start
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-The app will open at `http://localhost:8501`.
-
-## Deploy to Streamlit Cloud (Free)
-
-1. **Create a GitHub repo** — push `app.py`, `requirements.txt`, and this README.
-2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub.
-3. Click **New app** → select your repo, branch `main`, main file `app.py`.
-4. Click **Deploy**. You'll get a public URL like `https://your-app.streamlit.app`.
+1. Upload your Excel file containing two tabs of monthly data
+2. Select the country (US 10Y or AU 10Y) from the sidebar
+3. The model runs automatically and displays the current signal
 
 ## How It Works
 
-| Step | Detail |
-|------|--------|
-| **Input** | Monthly Excel file — any number of independent variables with Row 2 feature flags |
-| **Feature Flags** | `L` (level), `LM` (level + MoM change), `LMP` (level + MoM + %), `MP` (MoM + %), `P` (% only), `N` (exclude) |
-| **Auto-Selection** | For `LMP`/`MP` flags, the model auto-selects MoM or % change per rolling window (eliminates multicollinearity) |
-| **Data Scaling** | HYG Shares Outstanding auto-divided by 1M at load; design matrix standardised via `StandardScaler` before final-window regression |
-| **Model** | Rolling OLS regression (36/48/60-month window); final-window stats via QR decomposition for numerically stable standard errors |
-| **Signal** | Z-score of residuals with asymmetric thresholds (default: CHEAP at 1.0σ, RICH at 2.0σ) |
+The model regresses bond yields against macro and market factors using a rolling window (default 60 months). The residual (actual yield minus predicted "fair value" yield) is normalised into a Z-Score. Yields significantly above fair value → **CHEAP** (bonds undervalued, buy signal). Yields significantly below fair value → **RICH** (bonds overvalued, sell/hedge signal).
 
-### Regression Statistics
+## Input File Format
 
-The final-window regression statistics (coefficients, standard errors, t-statistics, p-values) use a three-step approach for numerical stability:
+A single `.xlsx` file with **two tabs**:
 
-1. **StandardScaler** standardises the design matrix (zero mean, unit variance)
-2. **QR decomposition** solves the regression and computes the variance-covariance matrix
-3. **Unscaling** converts coefficients and SEs back to natural units (spread impact per 1-unit raw variable move)
+- **`US Model field and data`** — US 10Y yield and its independent variables
+- **`AU Model field and data`** — AU 10Y yield and its independent variables
 
-### Sidebar
+Each tab has the same layout:
 
-The sidebar displays model settings, detected variables with their flags, per-window feature selection results (which transformation was chosen for competing MoM/% pairs), and a coefficient summary for the latest rolling window.
+| Row | Content |
+|-----|---------|
+| Row 1 | Column headers (Cell A1 may contain a Bloomberg reference date — ignored) |
+| Row 2 | Feature flags: `L`, `LM`, `LMP`, `MP`, `P`, or `N` (blank for Date and yield columns) |
+| Row 3+ | Monthly data |
 
-## Expected Excel Format
+### Feature Flags
 
-```
-| Date       | US High Yield Spread | VIX  | Oil   | CDX HY | MOVE | SPX  | HYG Shares | US 10Y Yield |
-|            |                      | LM   | LM    | MP     | LM   | LM   | P          | L            |
-| 2020-01-31 | 3.56                 | 18.8 | 51.56 | 320    | 57.8 | 3230 | 250000     | 1.51         |
-| 2020-02-28 | 4.01                 | 40.1 | 44.76 | 380    | 72.3 | 2954 | 280000     | 1.15         |
-```
+| Flag | Features Generated |
+|------|--------------------|
+| `L`  | Level only |
+| `LM` | Level + Month-over-Month Change |
+| `LMP`| Level + MoM Change + % Change |
+| `MP` | MoM Change + % Change |
+| `P`  | % Change only |
+| `N`  | Exclude from model |
 
-- **Row 1:** Column headers (Date and HY Spread are auto-detected by name)
-- **Row 2:** Feature flags — blank for Date and HY Spread, a valid flag for each independent variable
-- **Row 3+:** Monthly data
-- Add or remove columns freely — no code changes needed
+### Signal Interpretation (Bonds)
+
+- **CHEAP:** Yields are *higher* than fair value → bonds are undervalued → buying opportunity
+- **RICH:** Yields are *lower* than fair value → bonds are overvalued → sell/hedge
+- **NEUTRAL:** Yields are near fair value
+
+Uses **symmetric thresholds** (default 1.5σ, adjustable via slider).
+
+## Monthly Commentary
+
+The Commentary & Attribution box explains the change in the model's fair-value yield. Its lines are:
+
+| Line | Meaning |
+|------|---------|
+| **Move vs published prior month** | Current fair value minus last month's fair value as you published it. Shown only when a published figure is available. |
+| **Prior-month revision** | Last month's fair value as restated by this upload, minus the figure you published. Non-zero when last month's inputs changed (for example macro data released after the previous download). Shown only when a published figure is available. |
+| **Move vs restated prior month** | Current fair value minus last month's fair value as restated by this upload. The factor lines below explain this move, and it equals the sum of all rows in the attribution table. |
+| **Stale inputs** | Active inputs whose latest value is blank and carried forward, or identical to the prior month. The latest fair value relies on these and may be restated next month. A genuinely unchanged input (for example Fed Funds) is also flagged, so check before concluding data is stale. |
+| **Primary / Secondary / Tertiary Driver** | Largest factor contributions to the move vs restated prior month. |
+| **Model Recalibration** | Part of the move caused by the rolling window shifting (coefficient drift and intercept change). Included in the move vs restated prior month. |
+| **Signal Status** | Current signal, Z-Score and in-sample R². |
+
+Move vs published prior month = Prior-month revision + Move vs restated prior month.
+
+### Published history
+
+The app does not store anything between uploads, so it needs last month's published fair value to show the revision. Either:
+
+- Type it in the sidebar under **Published history** ("last month's published fair value", e.g. `5.02`), or
+- Keep a `published_fair_value.csv` in the model folder. Use **Download updated published history (CSV)** (or **Save to local history file** when running locally) after you publish each month, then upload the CSV in the sidebar next month. When running locally, the app reads the file from the model folder automatically.
+
+Streamlit Cloud has no persistent disk, so the CSV must be kept by you and re-uploaded. History rows are keyed by country, model specification, lookback and date.
+
+## Deployment
+
+Deployed on [Streamlit Cloud](https://share.streamlit.io). Push changes to `main` branch and Streamlit auto-deploys.
+
+## Dependencies
+
+See `requirements.txt`. All standard Python packages — no Bloomberg API dependency (data is uploaded via Excel).
